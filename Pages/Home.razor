@@ -1,0 +1,228 @@
+﻿@page "/"
+
+@inject IJSRuntime JSRuntime
+@using System.Text.Json
+
+
+<PageTitle>Task Manager App</PageTitle>
+
+<div class="container mt-4">
+    <div class="form-group">
+        <label for="taskInput">Task</label>
+        <input id="taskInput" class="form-control" @bind="_TaskContent" />
+
+        <label for="completionTime" class="mt-2">Completion Time</label>
+        <input id="completionTime" type="datetime-local" class="form-control" @bind="_CompletionTime" />
+
+        <label for="priority" class="mt-2">Priority</label>
+        <select id="priority" class="form-control" @bind="_Priority">
+            <option value="Low">Low</option>
+            <option value="Medium">Medium</option>
+            <option value="High">High</option>
+        </select>
+
+        <label for="category" class="mt-2">Category</label>
+        <select id="category" class="form-control" @bind="_Category">
+            <option value="Work">Work</option>
+            <option value="Personal">Personal</option>
+            <option value="Miscellaneous">Miscellaneous</option>
+        </select>
+    </div>
+</div>
+
+
+@if (ShowConfirmDeleteOption)
+{
+    <div class="alert alert-danger mt-3">
+        <p>Do you want to delete this task?</p>
+        <p><strong>@_CurrentTask.TaskContent</strong></p>
+        <div>
+            <button class="btn btn-secondary" @onclick="CancelDelete">No</button>
+            <button class="btn btn-danger" @onclick="DeleteTask">Yes</button>
+        </div>
+    </div>
+}
+
+<div class="container mt-4">
+    <button type="button" class="btn btn-primary mt-2" @onclick="Save">Save</button>
+    <div class="text-danger">@ErrorMessage</div>
+</div>
+
+<ul class="list-group mt-4">
+    @foreach (var task in Tasks)
+    {
+        <li class="list-group-item d-flex justify-content-between align-items-center">
+            <span style="text-decoration: @(task.IsDone ? "line-through" : "none")">@task.TaskContent</span>
+            <span class="badge badge-primary badge-pill">@task.Priority</span>
+            <span class="badge badge-secondary">@task.Category</span>
+            <div>
+                <button class="btn btn-outline-danger btn-sm mr-2" @onclick="() => ConfirmDelete(task)">Delete</button>
+                <button class="btn btn-outline-primary btn-sm mr-2" @onclick="() => Edit(task)">Edit</button>
+                <button class="btn btn-outline-success btn-sm" @onclick="() => ToggleDone(task)">@((task.IsDone ? "Undone" : "Done"))</button>                
+            </div>
+        </li>
+    }
+</ul>
+
+@code {
+    private bool ShowConfirmDeleteOption = false;
+    private string _TaskContent;
+    private DateTime? _CompletionTime;
+    private string _Priority = "Low";
+    private string _Category = "Work";
+    private TaskItem? _CurrentTask = null;
+    private List<TaskItem> Tasks = new List<TaskItem>();
+    private string ErrorMessage;
+    private bool IsDarkMode = false;
+    
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadTasksFromStorage();
+    }
+
+    private async Task LoadTasksFromStorage()
+    {
+        try
+        {
+            var tasksJson = await JSRuntime.InvokeAsync<string>("localStorage.getItem", "tasks");
+            if (!string.IsNullOrEmpty(tasksJson))
+            {
+                Tasks = JsonSerializer.Deserialize<List<TaskItem>>(tasksJson);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading tasks from local storage: {ex.Message}");
+        }
+    }
+
+    private async Task SaveTasksToStorage()
+    {
+        try
+        {
+            var tasksJson = JsonSerializer.Serialize(Tasks);
+            await JSRuntime.InvokeVoidAsync("localStorage.setItem", "tasks", tasksJson);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error saving tasks to local storage: {ex.Message}");
+        }
+    }
+
+
+
+    private void Save()
+    {
+        if (string.IsNullOrWhiteSpace(_TaskContent))
+        {
+            ErrorMessage = "Task must not be empty";
+            return;
+        }
+
+        if (_CurrentTask is null)
+        {
+            if (Tasks.Any(t => t.TaskContent.Equals(_TaskContent, StringComparison.OrdinalIgnoreCase)))
+            {
+                ErrorMessage = "Task already exists";
+                return;
+            }
+
+            var newTask = new TaskItem
+                {
+                    TaskContent = _TaskContent,
+                    CompletionTime = _CompletionTime,
+                    Priority = _Priority,
+                    Category = _Category
+                };
+            Tasks.Add(newTask);
+            ErrorMessage = "Task added successfully";
+        }
+        else
+        {
+            _CurrentTask.TaskContent = _TaskContent;
+            _CurrentTask.CompletionTime = _CompletionTime;
+            _CurrentTask.Priority = _Priority;
+            _CurrentTask.Category = _Category;
+            _CurrentTask = null;
+            ErrorMessage = "Task updated successfully";
+        }
+
+        _TaskContent = string.Empty;
+        _CompletionTime = null;
+        _Priority = "Low";
+        _Category = "Work";
+
+        // Save tasks to local storage after saving/updating
+        SaveTasksToStorage();
+    }
+
+    private void ToggleDone(TaskItem task)
+    {
+        task.IsDone = !task.IsDone;
+    }
+
+
+
+    private void Edit(TaskItem task)
+    {
+        _CurrentTask = task;
+        _TaskContent = task.TaskContent;
+        _CompletionTime = task.CompletionTime;
+        _Priority = task.Priority;
+        _Category = task.Category;
+    }
+
+    private void ConfirmDelete(TaskItem task)
+    {
+        _CurrentTask = task;
+        ShowConfirmDeleteOption = true;
+    }
+
+    private void CancelDelete()
+    {
+        ShowConfirmDeleteOption = false;
+    }
+
+    private void DeleteTask()
+    {
+        Tasks.Remove(_CurrentTask);
+        ShowConfirmDeleteOption = false;
+        _CurrentTask = null; // Reset _CurrentTask after deletion
+    }   
+
+    private async Task StartReminderCheck()
+    {
+        while (true)
+        {
+            var now = DateTime.Now;
+            foreach (var task in Tasks)
+            {
+                if (task.CompletionTime.HasValue && task.CompletionTime.Value <= now)
+                {
+                    PlayAlarm("/alarm.mp3");
+                    task.CompletionTime = null; // Ensure alarm only goes off once
+                }
+            }
+            await Task.Delay(60000); // Check every minute
+        }
+    }
+
+
+
+    private void PlayAlarm(string soundUrl)
+    {
+        JSRuntime.InvokeVoidAsync("playAlarmSound", soundUrl);
+    }
+
+
+
+    public class TaskItem
+    {
+        public string TaskContent { get; set; }
+        public bool IsDone { get; set; }
+        public DateTime? CompletionTime { get; set; }
+        public string Priority { get; set; }
+        public string Category { get; set; }
+    }
+}
